@@ -66,7 +66,7 @@ $$
 The final daily energy harvested ($E_{harvest}$) in Watt-hours ($Wh$) is the product of the available solar resource and the system efficiency chain:
 
 $$
-E_{harvest} = (PSH \times 1000) \cdot A_{PV} \cdot \eta_{cell} \cdot F(\theta) \cdot (1 - L_{IR})
+E_{harvest} = (PSH \times STC) \cdot A_{PV} \cdot \eta_{cell} \cdot F(\theta) \cdot (1 - L_{IR})
 $$
 
 **Where:**
@@ -74,6 +74,7 @@ $$
 * $A_{PV}$: Total active cell area ($m^2$).
 * $\eta_{cell}$: Rated cell efficiency (e.g., $0.22$).
 * $L_{IR}$: Spectral loss from the Low-E / IR-cut window coating.
+* $STC$: Standard Test Condition solar irradiance (1000 W/m^2)
 
 ---
 

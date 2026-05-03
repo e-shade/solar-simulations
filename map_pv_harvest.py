@@ -12,6 +12,8 @@ CACHE_FILE = "pv_data_cache.pkl"
 BASE_URL = "https://developer.nlr.gov/api/pvwatts/v8.json"
 API_KEY = '6UGQKK7Q3p4pEKZXbbvYEnYXzAegBJnzm3vNss38' 
 
+STC_IRRADIANCE = 1000  # Standard Test Condition solar irradiance (W/m^2)
+
 # --- CACHING LOGIC ---
 def load_cache():
     if os.path.exists(CACHE_FILE):
@@ -193,7 +195,7 @@ with tab1:
         psh_list = get_psh_data_cached(lat, lon, alpha)
         psh = psh_list[m_idx]
         phys_mod = get_physics_mod(lat, lon, m_idx, alpha)
-        raw_wh = (psh * 1000) * total_area_m2 * eff
+        raw_wh = (psh * STC_IRRADIANCE) * total_area_m2 * eff
         aoi_loss = raw_wh * (1 - phys_mod)
         final_wh = (raw_wh - aoi_loss) * (1 - ir_loss_const)
         data_rows.append({"State": code, "Full Name": name, "Final Wh": round(final_wh, 2)})
