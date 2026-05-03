@@ -335,8 +335,7 @@ with tab2:
 
 with tab3:
     st.header("Monthly Harvesting Sufficiency")
-    show_values = st.toggle("Show raw Watt-hour values", value=False)
-    st.caption("🟩/Green = Sufficient harvest | 🟥/Red = Insufficient harvest")
+    st.caption("Values in Wh/day. Green = Sufficient harvest | Red = Insufficient harvest")
     
     # This matrix calculation involves 600 data points (50 states * 12 months)
     with st.spinner("Calculating annual sufficiency matrix..."):
@@ -351,24 +350,17 @@ with tab3:
                 m_raw_wh = (m_psh * STC_IRRADIANCE) * total_area_m2 * eff
                 m_final_wh = m_raw_wh * p_mod * (1 - ir_loss_const) * (1 - soiling_loss/100) * (1 - system_loss/100)
                 
-                # Determine status icon or numerical value
-                if show_values:
-                    state_row[m_name] = round(m_final_wh, 3)
-                else:
-                    state_row[m_name] = "🟩" if m_final_wh >= film_total_daily_consumption_wh else "🟥"
+                state_row[m_name] = round(m_final_wh, 3)
             matrix_rows.append(state_row)
         
         matrix_df = pd.DataFrame(matrix_rows)
 
         # Use a large height to ensure all states are visible without nested scrollbars
-        if show_values:
-            styled_df = matrix_df.style.map(
-                lambda v: f"color: {'#09ab3b' if v >= film_total_daily_consumption_wh else '#FF4B4B'}",
-                subset=months_list
-            ).format("{:.3f}", subset=months_list)
-            st.dataframe(styled_df, width='stretch', hide_index=True, height=800)
-        else:
-            st.dataframe(matrix_df, width='stretch', hide_index=True, height=800)
+        styled_df = matrix_df.style.map(
+            lambda v: f"color: {'#09ab3b' if v >= film_total_daily_consumption_wh else '#FF4B4B'}",
+            subset=months_list
+        ).format("{:.3f}", subset=months_list)
+        st.dataframe(styled_df, width='stretch', hide_index=True, height=800)
 
 with tab4:
     help_path = os.path.join(os.path.dirname(__file__), "help.md")
