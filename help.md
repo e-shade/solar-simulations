@@ -13,6 +13,28 @@ This app calculates the daily average energy harvest based on:
 * **180°**: South (Ideal for Northern Hemisphere)
 * **270°**: West
 
+Note: Only when changing Azimuth (the window's facing direction), the data based on this azimuth is fetched from NREL site. The process takes about 1min
+
+### Window Geometry
+* A 2D representation of the window fitted with the PDLC and the borders.
+* The combined borders area is assumed to include PV cells flushed with the window's surface.
+* The battery, or two, will be part of the bottom border and if selected, also part of the top border.
+
+#### Understanding Glass Extinction ($K$)
+The **Extinction Coefficient ($K$)** represents how much solar energy is absorbed by the glass material itself as light passes through it. A higher $K$ value means less light reaches the PV cells.
+
+*   **Low-Iron Glass ($K \approx 4$):** Often called "Solar Glass." It is highly transparent and lacks the green tint seen in standard glass. This is ideal for maximum energy harvest.
+*   **Standard Clear Float Glass ($K \approx 32$):** Common window glass. The iron impurities cause a slight green tint and absorb significantly more light than solar glass.
+*   **Tinted Glass ($K > 100$):** Specifically designed to reduce solar heat gain, which significantly penalizes PV performance.
+
+### Interactive Map
+The map gradient colors represent the daily energy harvesting potential, The gradient transitions from Red (Insufficient) to Green (Sufficient) based on the expected PDLC daily film energy usage. This provides an immediate "at-a-glance" status for every state without needing to hover.
+
+When hovering over the map, A blob will show:
+* State name
+* Is harvesting sufficient?
+* Energy collected per day
+* Peak sun hours
 
 ## Equations
 
@@ -38,13 +60,22 @@ $$
 ---
 
 ### 2. Optical Transmission & Fresnel Losses
-Because the PV cells are behind glass, not all light reaching the window surface reaches the cells. We use a **Physical Incident Angle Modifier (IAM)** to model Fresnel reflection:
+Because the PV cells are behind glass, not all light reaching the window surface reaches the cells. The **Physical Incident Angle Modifier (IAM)** models the reduction in transmission due to reflection and absorption as the incident angle increases.
 
+The transmission $T(\theta)$ is defined by the combination of Fresnel reflection and the Beer-Lambert law:
+$$
+T(\theta) = \tau_{refl}(\theta) \cdot \tau_{abs}(\theta)
+$$
+
+**Where:**
+* **Snell's Law:** $\theta_r = \arcsin\left(\frac{1}{n} \sin \theta\right)$ defines the refraction angle inside the glass ($n \approx 1.526$).
+* **Fresnel Reflection:** $\tau_{refl}(\theta) = 1 - \frac{1}{2} \left( \frac{\sin^2(\theta_r - \theta)}{\sin^2(\theta_r + \theta)} + \frac{\tan^2(\theta_r - \theta)}{\tan^2(\theta_r + \theta)} \right)$
+* **Beer-Lambert Absorption:** $\tau_{abs}(\theta) = e^{-\frac{K \cdot L}{\cos \theta_r}}$ (governed by extinction coefficient $K$ and thickness $L$).
+
+The final modifier used in calculations is normalized relative to normal incidence ($0^\circ$):
 $$
 F(\theta) = \frac{T(\theta)}{T(0)}
 $$
-
-As $\theta$ increases beyond $60^\circ$, the reflection coefficient increases sharply, reducing the effective energy reaching the PV cell.
 
 ---
 
@@ -66,7 +97,7 @@ $$
 The final daily energy harvested ($E_{harvest}$) in Watt-hours ($Wh$) is the product of the available solar resource and the system efficiency chain:
 
 $$
-E_{harvest} = (PSH \times STC) \cdot A_{PV} \cdot \eta_{cell} \cdot F(\theta) \cdot (1 - L_{IR})
+E_{harvest} = (PSH \times STC) \cdot A_{PV} \cdot \eta_{cell} \cdot F(\theta) \cdot (1 - L_{IR}) \cdot (1 - L_{soil}) \cdot (1 - L_{sys})
 $$
 
 **Where:**
@@ -74,6 +105,8 @@ $$
 * $A_{PV}$: Total active cell area ($m^2$).
 * $\eta_{cell}$: Rated cell efficiency (e.g., $0.22$).
 * $L_{IR}$: Spectral loss from the Low-E / IR-cut window coating.
+* $L_{soil}$: Soiling loss (dust, dirt, bird droppings).
+* $L_{sys}$: System losses (wiring, mismatch, conversion).
 * $STC$: Standard Test Condition solar irradiance (1000 W/m^2)
 
 ---
