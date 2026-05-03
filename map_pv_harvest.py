@@ -29,31 +29,72 @@ if 'db' not in st.session_state:
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="PV Window Optimizer", layout="wide")
+
+# --- UI COMPRESSION (CSS) ---
+st.markdown("""
+    <style>
+    /* Reduce top padding of the main container */
+    .block-container {
+        padding-top: 1rem;
+    }
+    /* Reduce vertical padding in the sidebar widgets */
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        gap: 0.1rem;
+    }
+    /* Specifically target slider containers to reduce bottom margin */
+    div[data-testid="stSlider"] {
+        margin-bottom: -10px;
+        padding-bottom: 0px;
+    }
+    /* Reduce spacing for headers in sidebar */
+    [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+        padding-top: 0.5rem;
+        padding-bottom: 2.0rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 st.title("☀️ Interactive Window PV Harvester")
+st.caption("Calculations include: STC Efficiency, Cosine Angle, Fresnel Reflection (Glass), and Spectral IR Filtering.")
 
 # --- SIDEBAR GUI ---
-st.sidebar.header("System Parameters")
+st.sidebar.header("Window Geometry (mm)")
 window_w = st.sidebar.slider("Window Width (mm)", 500, 2000, 1000)
 window_h = st.sidebar.slider("Window Height (mm)", 500, 2000, 1000)
+t_bw = st.sidebar.slider("Top Border Height (mm)", 10, 100, 25)
+b_bw = st.sidebar.slider("Bottom Border Height (mm)", 10, 100, 30)
+lr_bw = st.sidebar.slider("Left/Right Border Width (mm)", 0, 100, 25)
+tb_thickness = st.sidebar.slider("Top/Bottom Thickness (mm)", 5, 20, 10)
+
+st.sidebar.header("System Parameters")
+film_power_consumption = st.sidebar.slider("Film Power Consumption (W/sqm)", 1, 20, 2)
+active_hours_per_day = st.sidebar.slider("Active Hours Per Day", 1, 24, 8)
+lipoly_energy_density = st.sidebar.slider("Battery Energy Density (Wh/L)", 200, 600, 350)
 eff = st.sidebar.slider("Cell Efficiency (E)", 0.10, 0.30, 0.22)
-alpha = st.sidebar.slider("Azimuth (180=South)", 0, 359, 180)
 ir_loss_const = st.sidebar.slider("IR Cut Coating Loss", 0.0, 0.50, 0.15)
 
-st.sidebar.header("PV Border Geometry (mm)")
-t_bw = st.sidebar.number_input("Top Border", value=25)
-b_bw = st.sidebar.number_input("Bottom Border", value=30)
-lr_bw = st.sidebar.number_input("Left/Right Border", value=25)
-
-selected_month = st.sidebar.select_slider("Select Month for Map", 
-    options=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])
-
 # --- CALCULATIONS ---
-# Geometric Area in m^2
-top_a = window_w * t_bw / 100
-bot_a = window_w * b_bw / 100
-side_a = (window_h - t_bw - b_bw) * lr_bw / 100 * 2
-total_area_m2 = (top_a + bot_a + side_a) / 10000
+# 1. Areas in mm^2
+top_area_mm2 = window_w * t_bw
+bot_area_mm2 = window_w * b_bw
+side_area_mm2 = (window_h - t_bw - b_bw) * lr_bw * 2
 
+# 2. Total PV Area in m^2 (for solar harvest logic)
+total_area_m2 = (top_area_mm2 + bot_area_mm2 + side_area_mm2) / 1_000_000
+
+# 3. Battery Volume Logic (Corrected Units)
+# Total Volume in mm^3
+total_vol_mm3 = (top_area_mm2 + bot_area_mm2) * tb_thickness
+# Convert mm^3 to Liters: (1 L = 1,000,000 mm^3)
+total_battery_volume_l = total_vol_mm3 / 1_000_000
+total_battery_capacity_wh = total_battery_volume_l * lipoly_energy_density
+
+# 4. Film Power Consumption (for reference, not used in map)
+total_film_area_m2 = (window_w * window_h) / 1_000_000
+film_power_consumption_w = total_film_area_m2 * film_power_consumption
+film_total_daily_consumption_wh = film_power_consumption_w * active_hours_per_day
+
+# --- STATE DATA ---
 us_states = {
     "AL": (32.31, -86.90, "Alabama"), "AK": (61.37, -152.40, "Alaska"), "AZ": (33.44, -112.07, "Arizona"),
     "AR": (34.74, -92.28, "Arkansas"), "CA": (36.77, -119.41, "California"), "CO": (39.55, -104.85, "Colorado"),
@@ -79,7 +120,6 @@ def get_psh_data_cached(lat, lon, alpha):
     if key in st.session_state.db:
         return st.session_state.db[key]
     
-    # Network fallback
     params = {'api_key': API_KEY, 'lat': lat, 'lon': lon, 'system_capacity': 1.0, 
               'azimuth': alpha, 'tilt': 90, 'array_type': 1, 'module_type': 0, 'losses': 0}
     try:
@@ -92,7 +132,6 @@ def get_psh_data_cached(lat, lon, alpha):
         return [0]*12
 
 def get_physics_mod(lat, lon, month_idx, alpha):
-    # Using lowercase 'h' for modern pandas compatibility
     times = pd.date_range(f'2026-{month_idx+1:02d}-15', periods=24, freq='h', tz='UTC')
     solpos = pvlib.solarposition.get_solarposition(times, lat, lon)
     aoi = pvlib.irradiance.aoi(90, alpha, solpos['zenith'], solpos['azimuth'])
@@ -101,33 +140,53 @@ def get_physics_mod(lat, lon, month_idx, alpha):
     return iam[mask].mean() if mask.any() else 0.1
 
 # --- PROCESSING ---
+c1, c2 = st.columns([3, 1])
+
+with c1:
+    map_container = st.container()
+    st.write("---")
+    col_compass, col_sliders = st.columns([1, 2])
+    
+    with col_sliders:
+        alpha = st.slider("Azimuth (0°=N, 180°=S)", 0, 359, 180)
+        selected_month = st.select_slider("Select Month for Map", 
+            options=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], value="Jun")
+            
+    with col_compass:
+        compass_fig = px.scatter_polar(
+            r=[1], theta=[alpha],
+            range_r=[0, 1.1],
+            start_angle=90, direction="clockwise"
+        )
+        compass_fig.update_traces(marker=dict(size=18, color='#FF4B4B', symbol='triangle-up'))
+        compass_fig.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=False),
+                angularaxis=dict(tickvals=[0, 90, 180, 270], ticktext=['N', 'E', 'S', 'W'], rotation=90, direction='clockwise')
+            ),
+            showlegend=False, margin=dict(l=10, r=10, t=30, b=30), height=210
+        )
+        st.plotly_chart(compass_fig, width='stretch', config={'displayModeBar': False})
+
 month_map = {"Jan":0,"Feb":1,"Mar":2,"Apr":3,"May":4,"Jun":5,"Jul":6,"Aug":7,"Sep":8,"Oct":9,"Nov":10,"Dec":11}
 m_idx = month_map[selected_month]
-
 data_rows = []
-progress_text = "Updating Map..."
-my_bar = st.progress(0, text=progress_text)
 
+my_bar = st.progress(0, text="Updating Map...")
 for i, (code, (lat, lon, name)) in enumerate(us_states.items()):
     psh_list = get_psh_data_cached(lat, lon, alpha)
     psh = psh_list[m_idx]
     phys_mod = get_physics_mod(lat, lon, m_idx, alpha)
-    
-    # Energy Logic
     raw_wh = (psh * 1000) * total_area_m2 * eff
     aoi_loss = raw_wh * (1 - phys_mod)
     final_wh = (raw_wh - aoi_loss) * (1 - ir_loss_const)
-    
     data_rows.append({"State": code, "Full Name": name, "Final Wh": round(final_wh, 2)})
     my_bar.progress((i + 1) / len(us_states))
-
 my_bar.empty()
 df = pd.DataFrame(data_rows)
 
-# --- UI LAYOUT ---
-c1, c2 = st.columns([3, 1])
-
-with c1:
+# --- FILL UI LAYOUT ---
+with map_container:
     fig = px.choropleth(df, 
         locations='State', 
         locationmode="USA-states", 
@@ -138,12 +197,27 @@ with c1:
         color_continuous_scale="Plasma",
         labels={'Final Wh':'Wh/Day'})
     fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 with c2:
-    st.metric("Total PV Area", f"{total_area_m2:.4f} m²")
-    st.metric("Peak Potential (US)", f"{df['Final Wh'].max()} Wh")
-    st.write("#### Performance Leaderboard")
-    st.table(df.sort_values("Final Wh", ascending=False).head(8)[["Full Name", "Final Wh"]])
+    min_val = df['Final Wh'].min()
+    # Determine status color: Green if production > load, else Red
+    status_color = "#09ab3b" if min_val > film_total_daily_consumption_wh else "#FF4B4B"
+    
+    st.markdown(f"""
+        <style>
+        /* Target the value text of the 6th metric on the page */
+        div[data-testid="stMetric"]:nth-of-type(6) [data-testid="stMetricValue"] > div {{
+            color: {status_color} !important;
+        }}
+        </style>
+    """, unsafe_allow_html=True)
 
-st.caption("Calculations include: STC Efficiency, Cosine Angle, Fresnel Reflection (Glass), and Spectral IR Filtering.")
+    st.metric("Total PV Area", f"{total_area_m2:.4f} m²")
+    st.metric("Battery Capacity", f"{total_battery_capacity_wh:.2f} Wh")
+    st.metric("Battery Autonomy", f"{total_battery_capacity_wh/film_total_daily_consumption_wh:.2f} Days")
+    st.metric("Film Daily Consumption", f"{film_total_daily_consumption_wh:.2f} Wh")
+    st.metric("Peak Daily Harvesting Potential (US)", f"{df['Final Wh'].max()} Wh")
+    st.metric("Minimum Daily Harvesting Potential (US)", f"{min_val} Wh")
+    st.write("#### Bottom 8 States (Min Production)")
+    st.table(df.sort_values("Final Wh", ascending=True).head(8)[["Full Name", "Final Wh"]])
