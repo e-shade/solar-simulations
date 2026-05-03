@@ -240,7 +240,7 @@ with tab1:
         st.table(df.sort_values("Final Wh", ascending=True).head(8)[["Full Name", "Final Wh"]])
 
 with tab2:
-    help_path = "/home/yossi/Shade/github/solar-simulations/help.md"
+    help_path = os.path.join(os.path.dirname(__file__), "help.md")
     if os.path.exists(help_path):
         with open(help_path, "r", encoding="utf-8") as f:
             st.markdown(f.read())
