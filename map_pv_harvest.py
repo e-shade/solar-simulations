@@ -35,7 +35,7 @@ st.markdown("""
     <style>
     /* Reduce top padding of the main container */
     .block-container {
-        padding-top: 1rem;
+        padding-top: 2rem;
     }
     /* Reduce vertical padding in the sidebar widgets */
     [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
@@ -50,6 +50,18 @@ st.markdown("""
     [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
         padding-top: 0.5rem;
         padding-bottom: 2.0rem;
+    }
+    /* Change the color of the metric labels */
+    [data-testid="stMetricLabel"] {
+        color: #6c757d !important;
+    }
+    /* Change the color of the metric values */
+    [data-testid="stMetricValue"] > div {
+        color: #FF4B4B;
+    }
+    /* Center LaTeX equations */
+    .katex-display {
+        text-align: center !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -126,7 +138,6 @@ def get_psh_data_cached(lat, lon, alpha):
         r = requests.get(BASE_URL, params=params).json()
         data = r['outputs']['solrad_monthly']
         st.session_state.db[key] = data
-        save_cache(st.session_state.db)
         return data
     except:
         return [0]*12
@@ -140,84 +151,98 @@ def get_physics_mod(lat, lon, month_idx, alpha):
     return iam[mask].mean() if mask.any() else 0.1
 
 # --- PROCESSING ---
-c1, c2 = st.columns([3, 1])
+tab1, tab2 = st.tabs(["Interactive Map", "Technical Reference"])
 
-with c1:
-    map_container = st.container()
-    st.write("---")
-    col_compass, col_sliders = st.columns([1, 2])
-    
-    with col_sliders:
-        alpha = st.slider("Azimuth (0°=N, 180°=S)", 0, 359, 180)
-        selected_month = st.select_slider("Select Month for Map", 
-            options=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], value="Jun")
-            
-    with col_compass:
-        compass_fig = px.scatter_polar(
-            r=[1], theta=[alpha],
-            range_r=[0, 1.1],
-            start_angle=90, direction="clockwise"
-        )
-        compass_fig.update_traces(marker=dict(size=18, color='#FF4B4B', symbol='triangle-up'))
-        compass_fig.update_layout(
-            polar=dict(
-                radialaxis=dict(visible=False),
-                angularaxis=dict(tickvals=[0, 90, 180, 270], ticktext=['N', 'E', 'S', 'W'], rotation=90, direction='clockwise')
-            ),
-            showlegend=False, margin=dict(l=10, r=10, t=30, b=30), height=210
-        )
-        st.plotly_chart(compass_fig, width='stretch', config={'displayModeBar': False})
+with tab1:
+    # Create progress bar at the top of the tab for maximum visibility
+    my_bar = st.progress(0, text="Preparing simulation...")
 
-month_map = {"Jan":0,"Feb":1,"Mar":2,"Apr":3,"May":4,"Jun":5,"Jul":6,"Aug":7,"Sep":8,"Oct":9,"Nov":10,"Dec":11}
-m_idx = month_map[selected_month]
-data_rows = []
+    c1, c2 = st.columns([3, 1])
 
-my_bar = st.progress(0, text="Updating Map...")
-for i, (code, (lat, lon, name)) in enumerate(us_states.items()):
-    psh_list = get_psh_data_cached(lat, lon, alpha)
-    psh = psh_list[m_idx]
-    phys_mod = get_physics_mod(lat, lon, m_idx, alpha)
-    raw_wh = (psh * 1000) * total_area_m2 * eff
-    aoi_loss = raw_wh * (1 - phys_mod)
-    final_wh = (raw_wh - aoi_loss) * (1 - ir_loss_const)
-    data_rows.append({"State": code, "Full Name": name, "Final Wh": round(final_wh, 2)})
-    my_bar.progress((i + 1) / len(us_states))
-my_bar.empty()
-df = pd.DataFrame(data_rows)
+    with c1:
+        map_container = st.container()
+        st.write("---")
+        col_compass, col_sliders = st.columns([1, 2])
+        
+        with col_sliders:
+            alpha = st.slider("Azimuth (0°=N, 180°=S)", 0, 359, 180)
+            selected_month = st.select_slider("Select Month for Map", 
+                options=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], value="Jun")
+                
+        with col_compass:
+            compass_fig = px.scatter_polar(
+                r=[1], theta=[alpha],
+                range_r=[0, 1.1],
+                start_angle=90, direction="clockwise"
+            )
+            compass_fig.update_traces(marker=dict(size=18, color='#FF4B4B', symbol='triangle-up'))
+            compass_fig.update_layout(
+                polar=dict(
+                    radialaxis=dict(visible=False),
+                    angularaxis=dict(tickvals=[0, 90, 180, 270], ticktext=['N', 'E', 'S', 'W'], rotation=90, direction='clockwise')
+                ),
+                showlegend=False, margin=dict(l=10, r=10, t=30, b=30), height=210
+            )
+            st.plotly_chart(compass_fig, width='stretch', config={'displayModeBar': False})
 
-# --- FILL UI LAYOUT ---
-with map_container:
-    fig = px.choropleth(df, 
-        locations='State', 
-        locationmode="USA-states", 
-        color='Final Wh',
-        scope="usa",
-        hover_name="Full Name",
-        title=f"Daily Average Harvest (Wh) - {selected_month}",
-        color_continuous_scale="Plasma",
-        labels={'Final Wh':'Wh/Day'})
-    fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
-    st.plotly_chart(fig, width='stretch')
+    month_map = {"Jan":0,"Feb":1,"Mar":2,"Apr":3,"May":4,"Jun":5,"Jul":6,"Aug":7,"Sep":8,"Oct":9,"Nov":10,"Dec":11}
+    m_idx = month_map[selected_month]
+    data_rows = []
 
-with c2:
-    min_val = df['Final Wh'].min()
-    # Determine status color: Green if production > load, else Red
-    status_color = "#09ab3b" if min_val > film_total_daily_consumption_wh else "#FF4B4B"
-    
-    st.markdown(f"""
-        <style>
-        /* Target the value text of the 6th metric on the page */
-        div[data-testid="stMetric"]:nth-of-type(6) [data-testid="stMetricValue"] > div {{
-            color: {status_color} !important;
-        }}
-        </style>
-    """, unsafe_allow_html=True)
+    for i, (code, (lat, lon, name)) in enumerate(us_states.items()):
+        psh_list = get_psh_data_cached(lat, lon, alpha)
+        psh = psh_list[m_idx]
+        phys_mod = get_physics_mod(lat, lon, m_idx, alpha)
+        raw_wh = (psh * 1000) * total_area_m2 * eff
+        aoi_loss = raw_wh * (1 - phys_mod)
+        final_wh = (raw_wh - aoi_loss) * (1 - ir_loss_const)
+        data_rows.append({"State": code, "Full Name": name, "Final Wh": round(final_wh, 2)})
+        # Update progress and show current state name to user
+        my_bar.progress((i + 1) / len(us_states), text=f"Processing {name}...")
 
-    st.metric("Total PV Area", f"{total_area_m2:.4f} m²")
-    st.metric("Battery Capacity", f"{total_battery_capacity_wh:.2f} Wh")
-    st.metric("Battery Autonomy", f"{total_battery_capacity_wh/film_total_daily_consumption_wh:.2f} Days")
-    st.metric("Film Daily Consumption", f"{film_total_daily_consumption_wh:.2f} Wh")
-    st.metric("Peak Daily Harvesting Potential (US)", f"{df['Final Wh'].max()} Wh")
-    st.metric("Minimum Daily Harvesting Potential (US)", f"{min_val} Wh")
-    st.write("#### Bottom 8 States (Min Production)")
-    st.table(df.sort_values("Final Wh", ascending=True).head(8)[["Full Name", "Final Wh"]])
+    # Save cache to disk once after batch processing is complete
+    save_cache(st.session_state.db)
+    my_bar.empty()
+    df = pd.DataFrame(data_rows)
+
+    # --- FILL UI LAYOUT ---
+    with map_container:
+        fig = px.choropleth(df, 
+            locations='State', 
+            locationmode="USA-states", 
+            color='Final Wh',
+            scope="usa",
+            hover_name="Full Name",
+            title=f"Daily Average Harvest (Wh) - {selected_month}",
+            color_continuous_scale="Plasma",
+            labels={'Final Wh':'Wh/Day'})
+        fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
+        st.plotly_chart(fig, width='stretch')
+
+    with c2:
+        min_val = df['Final Wh'].min()
+        status_color = "#09ab3b" if min_val > film_total_daily_consumption_wh else "#FF4B4B"
+        st.markdown(f"""
+            <style>
+            div[data-testid="stMetric"]:nth-of-type(6) [data-testid="stMetricValue"] > div {{
+                color: {status_color} !important;
+            }}
+            </style>
+        """, unsafe_allow_html=True)
+
+        st.metric("Total PV Area", f"{total_area_m2:.4f} m²")
+        st.metric("Battery Capacity", f"{total_battery_capacity_wh:.2f} Wh")
+        st.metric("Battery Autonomy", f"{total_battery_capacity_wh/film_total_daily_consumption_wh:.2f} Days")
+        st.metric("Film Consumption", f"{film_total_daily_consumption_wh:.2f} Wh")
+        st.metric("Peak Daily Harvesting Potential (US)", f"{df['Final Wh'].max()} Wh")
+        st.metric("Minimum Daily Harvesting Potential (US)", f"{min_val} Wh")
+        st.write("#### Bottom 8 States (Min Production)")
+        st.table(df.sort_values("Final Wh", ascending=True).head(8)[["Full Name", "Final Wh"]])
+
+with tab2:
+    help_path = "/home/yossi/Shade/github/solar-simulations/help.md"
+    if os.path.exists(help_path):
+        with open(help_path, "r", encoding="utf-8") as f:
+            st.markdown(f.read())
+    else:
+        st.error("Help file not found.")
