@@ -90,6 +90,7 @@ with st.sidebar:
         st.header("Window Geometry")
         window_w = st.slider("Width (mm)", 100, 2000, 1000, step=100)
         window_h = st.slider("Height (mm)", 100, 2000, 1000, step=100)
+
         t_bw = st.slider("Top Border Height (mm)", 10, 100, 25)
         b_bw = st.slider("Bottom Border Height (mm)", 10, 100, 30)
         lr_bw = st.slider("Side Borders Width (mm)", 0, 100, 25)
@@ -101,7 +102,8 @@ with st.sidebar:
         glass_extinction = st.slider("Extinction (K)", 1.0, 32.0, 4.0, step=1.0)
 
     with sb_col2:
-        alpha = st.slider("Window Orientation (Azimuth) [0°=N, 180°=S]", 0, 359, 180)
+        tilt = st.slider("Window tilt (deg)", 0, 90, 90)
+        alpha = st.slider("Window azimuth [0°=N, 180°=S]", 0, 359, 180)
 
         selected_month = st.select_slider("Month Selector",
             options=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], value="Jun")
@@ -162,13 +164,13 @@ us_states = {
     "WI": (43.78, -88.78, "Wisconsin"), "WY": (43.07, -107.29, "Wyoming")
 }
 
-def get_psh_data_cached(lat, lon, alpha):
+def get_psh_data_cached(lat, lon, alpha, tilt=90):
     key = f"{lat}_{lon}_{alpha}"
     if key in st.session_state.db:
         return st.session_state.db[key]
 
     params = {'api_key': API_KEY, 'lat': lat, 'lon': lon, 'system_capacity': 1.0,
-              'azimuth': alpha, 'tilt': 90, 'array_type': 0, 'module_type': 0, 'losses': 0}
+              'azimuth': alpha, 'tilt': tilt, 'array_type': 0, 'module_type': 0, 'losses': 0}
     try:
         r = requests.get(BASE_URL, params=params).json()
         data = r['outputs']['solrad_monthly']
@@ -178,11 +180,11 @@ def get_psh_data_cached(lat, lon, alpha):
         return [0]*12
 
 @st.cache_data
-def get_physics_mod(lat, lon, month_idx, alpha, K, L_mm):
+def get_physics_mod(lat, lon, month_idx, alpha, K, L_mm, tilt=90):
     L_m = L_mm / 1000.0  # Convert mm to meters for pvlib
     times = pd.date_range(f'2026-{month_idx+1:02d}-15', periods=24, freq='h', tz='UTC')
     solpos = pvlib.solarposition.get_solarposition(times, lat, lon)
-    aoi = pvlib.irradiance.aoi(90, alpha, solpos['zenith'], solpos['azimuth'])
+    aoi = pvlib.irradiance.aoi(tilt, alpha, solpos['zenith'], solpos['azimuth'])
 
     # Calculate detailed components for hover data
     n = 1.526 # Refractive index of glass
@@ -231,9 +233,9 @@ with tab1:
     # Inner function that processes states' solar data.
     def _process_state_task(item):
         code, (lat, lon, name) = item
-        psh_list = get_psh_data_cached(lat, lon, alpha)
+        psh_list = get_psh_data_cached(lat, lon, alpha, tilt)
         psh = psh_list[m_idx]
-        phys_mod, f_loss, a_loss = get_physics_mod(lat, lon, m_idx, alpha, glass_extinction, glass_thickness)
+        phys_mod, f_loss, a_loss = get_physics_mod(lat, lon, m_idx, alpha, glass_extinction, glass_thickness, tilt)
         raw_wh = (psh * STC_IRRADIANCE) * total_area_m2 * eff
         # Combine all derate factors: IAM * IR Loss * Soiling * System
         final_wh = raw_wh * phys_mod * (1 - ir_loss_const) * (1 - soiling_loss/100) * (1 - system_loss/100)
