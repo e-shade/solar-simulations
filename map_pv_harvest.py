@@ -1,6 +1,5 @@
 import os
 import pickle
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -15,9 +14,12 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ct
 # --- CONFIGURATION ---
 CACHE_FILE = "pv_data_cache.pkl"
 BASE_URL = "https://developer.nlr.gov/api/pvwatts/v8.json"
-API_KEY = '6UGQKK7Q3p4pEKZXbbvYEnYXzAegBJnzm3vNss38'
+# Option of multiple keys to bypass access limits.
+API_KEYS = {'yossi': '6UGQKK7Q3p4pEKZXbbvYEnYXzAegBJnzm3vNss38', 'nick': 'SLOgec88TwJ0f9kju0hbS3PgdTZfetRDEdMjh9gz'}
+API_KEY = API_KEYS['nick']
 STC_IRRADIANCE = 1000  # Standard Test Condition solar irradiance (W/m^2)
 NUM_THREADS = 20
+MONTH_MAP = {"Jan":0,"Feb":1,"Mar":2,"Apr":3,"May":4,"Jun":5,"Jul":6,"Aug":7,"Sep":8,"Oct":9,"Nov":10,"Dec":11}
 
 # --- CACHING LOGIC ---
 def load_cache():
@@ -164,8 +166,9 @@ us_states = {
     "WI": (43.78, -88.78, "Wisconsin"), "WY": (43.07, -107.29, "Wyoming")
 }
 
+# Returns monthly solar radiation values [kWh/m2/day], based on the given parameters.
 def get_psh_data_cached(lat, lon, alpha, tilt=90):
-    key = f"{lat}_{lon}_{alpha}"
+    key = f"{lat}_{lon}_{alpha}_{tilt}"
     if key in st.session_state.db:
         return st.session_state.db[key]
 
@@ -176,7 +179,8 @@ def get_psh_data_cached(lat, lon, alpha, tilt=90):
         data = r['outputs']['solrad_monthly']
         st.session_state.db[key] = data
         return data
-    except:
+    except Exception:
+        print("Error retrieving data")
         return [0]*12
 
 @st.cache_data
@@ -214,54 +218,58 @@ def get_physics_mod(lat, lon, month_idx, alpha, K, L_mm, tilt=90):
     return iam[mask].mean(), (1 - tau_refl[mask]).mean() * 100, (1 - tau_abs[mask]).mean() * 100
 
 # --- PROCESSING ---
-tab1, tab2, tab3, tab4 = st.tabs(["Interactive Map", "Window Geometry", "Monthly Sufficiency", "Technical Reference"])
+tab0, tab1, tab2, tab3, tab4 = st.tabs(["Monthly SolRad Map", "Interactive Map", "Window Geometry", "Monthly Sufficiency", "Technical Reference"])
 
+m_idx = MONTH_MAP[selected_month]
+ctx = get_script_run_ctx()
 
-with tab1:
-    # Create progress bar at the top of the tab for maximum visibility
-    my_bar = st.progress(0, text="Preparing simulation...")
+def get_psh_task(item):
+    code, (lat, lon, name) = item
+    psh_list = get_psh_data_cached(lat, lon, alpha, tilt)
+    psh = psh_list[m_idx]
+    return {"State": code, "Full Name": name, "PSH": round(psh, 2)}
 
-    c1, c2 = st.columns([5, 1])
+def process_simulation_task(item):
+    code, (lat, lon, name) = item
+    psh_list = get_psh_data_cached(lat, lon, alpha, tilt)
+    psh = psh_list[m_idx]
+    phys_mod, f_loss, a_loss = get_physics_mod(lat, lon, m_idx, alpha, glass_extinction, glass_thickness, tilt)
+    raw_wh = (psh * STC_IRRADIANCE) * total_area_m2 * eff
+    # Combine all derate factors: IAM * IR Loss * Soiling * System
+    final_wh = raw_wh * phys_mod * (1 - ir_loss_const) * (1 - soiling_loss/100) * (1 - system_loss/100)
+    status = "Insufficient" if final_wh < film_total_daily_consumption_wh else "Sufficient"
+    return {"State": code, "Full Name": name, "Final Wh": round(final_wh, 2), "Status": status,
+            "PSH": round(psh, 2), "Fresnel Loss": round(f_loss, 2), "Absorption": round(a_loss, 2)}
 
-    with c1:
-        map_container = st.container() # This container will hold the map
+def get_psh_all_states_multithread(my_bar):
+    # Function to wrap the task and ensure it has access to Streamlit context for caching.
+    def _wrapped_process_state_task(item, context):
+        add_script_run_ctx(None, context) # Attach to current thread
+        return get_psh_task(item)
 
-    month_map = {"Jan":0,"Feb":1,"Mar":2,"Apr":3,"May":4,"Jun":5,"Jul":6,"Aug":7,"Sep":8,"Oct":9,"Nov":10,"Dec":11}
-    m_idx = month_map[selected_month]
     data_rows = []
-
-    # Inner function that processes states' solar data.
-    def _process_state_task(item):
-        code, (lat, lon, name) = item
-        psh_list = get_psh_data_cached(lat, lon, alpha, tilt)
-        psh = psh_list[m_idx]
-        phys_mod, f_loss, a_loss = get_physics_mod(lat, lon, m_idx, alpha, glass_extinction, glass_thickness, tilt)
-        raw_wh = (psh * STC_IRRADIANCE) * total_area_m2 * eff
-        # Combine all derate factors: IAM * IR Loss * Soiling * System
-        final_wh = raw_wh * phys_mod * (1 - ir_loss_const) * (1 - soiling_loss/100) * (1 - system_loss/100)
-        status = "Insufficient" if final_wh < film_total_daily_consumption_wh else "Sufficient"
-        return {"State": code, "Full Name": name, "Final Wh": round(final_wh, 2), "Status": status,
-                "PSH": round(psh, 2), "Fresnel Loss": round(f_loss, 2), "Absorption": round(a_loss, 2)}
-
-    ## Note: The following code block is the sequential processing, which has been replaced by the parallel version below.
-    ## It is kept here for reference and can be removed if not needed.
-    # start = time.perf_counter()
-    # for i, item in enumerate(us_states.items()):
-    #     data_rows.append(_process_state_task(item))
-    #     # Update progress and show current state name to user
-    #     name = item[1][2]
-    #     my_bar.progress((i + 1) / len(us_states), text=f"Processing {name}...")
-    # end = time.perf_counter()
-    # print(f"Execution time: {end - start:.6f} seconds")
-
-    start = time.perf_counter()
-    # ctx - context for threads to access Streamlit session state safely
-    ctx = get_script_run_ctx()
     with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        # Inner function to wrap the task and ensure it has access to Streamlit context for caching.
-        def _wrapped_process_state_task(item, context):
-            add_script_run_ctx(None, context) # Attach to current thread
-            return _process_state_task(item)
+        futures = [executor.submit(_wrapped_process_state_task, item, ctx) for item in us_states.items()]
+        for i, future in enumerate(as_completed(futures)):
+            data_rows.append(future.result())
+            # Update progress and show current state name to user
+            name = future.result()["Full Name"]
+            percent_complete = (i+1) / len(futures)
+            my_bar.progress(percent_complete, text=f"Processing {name}...")
+
+    # Save cache to disk once after batch processing is complete
+    save_cache(st.session_state.db)
+    df = pd.DataFrame(data_rows)
+    return df
+
+def process_simulation_all_states_multithreaded(my_bar):
+    # Function to wrap the task and ensure it has access to Streamlit context for caching.
+    def _wrapped_process_state_task(item, context):
+        add_script_run_ctx(None, context) # Attach to current thread
+        return process_simulation_task(item)
+
+    data_rows = []
+    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         futures = [executor.submit(_wrapped_process_state_task, item, ctx) for item in us_states.items()]
 
         for i, future in enumerate(as_completed(futures)):
@@ -270,13 +278,53 @@ with tab1:
             name = future.result()["Full Name"]
             percent_complate = (i+1) / len(futures)
             my_bar.progress(percent_complate, text=f"Processing {name}...")
-    end = time.perf_counter()
-    print(f"Execution time: {end - start:.6f} seconds")
 
     # Save cache to disk once after batch processing is complete
     save_cache(st.session_state.db)
-    my_bar.empty()
     df = pd.DataFrame(data_rows)
+    return df
+
+with tab0:
+    # Create progress bar at the top of the tab for maximum visibility
+    my_bar = st.progress(0, text="Retrieving data...")
+
+    c1, c2 = st.columns([5, 1])
+
+    with c1:
+        map_container = st.container() # This container will hold the map
+
+    df = get_psh_all_states_multithread(my_bar)
+    my_bar.empty()
+
+    # --- FILL UI LAYOUT ---
+    with map_container:
+        custom_scale = 'solar'
+
+        fig = px.choropleth(df,
+            locations='State',
+            locationmode="USA-states",
+            color="PSH",
+            scope="usa",
+            hover_name="Full Name",
+            hover_data={"PSH": ":.2f", "State": False},
+            title=f"Monthly solar radiation, Peak sun hours (kWh/m2/day) - {selected_month}",
+            color_continuous_scale=custom_scale,
+            labels={'PSH': 'Peak Sun Hours (kWh/m2/day)'})
+        fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
+        st.plotly_chart(fig, width='stretch')
+
+with tab1:
+    # Create progress bar at the top of the tab for maximum visibility
+    bar1 = st.progress(0, text="Preparing simulation...")
+
+    c1, c2 = st.columns([5, 1])
+
+    with c1:
+        map_container = st.container() # This container will hold the map
+
+    df = process_simulation_all_states_multithreaded(bar1)
+    bar1.empty()
+
 
     # --- FILL UI LAYOUT ---
     with map_container:
@@ -380,9 +428,9 @@ with tab3:
         matrix_rows = []
         for code, (lat, lon, name) in us_states.items():
             state_row = {"State": name}
-            psh_list = get_psh_data_cached(lat, lon, alpha)
+            psh_list = get_psh_data_cached(lat, lon, alpha, tilt)
             for m_i, m_name in enumerate(months_list):
-                p_mod, _, _ = get_physics_mod(lat, lon, m_i, alpha, glass_extinction, glass_thickness)
+                p_mod, _, _ = get_physics_mod(lat, lon, m_i, alpha, glass_extinction, glass_thickness, tilt)
                 m_psh = psh_list[m_i]
                 m_raw_wh = (m_psh * STC_IRRADIANCE) * total_area_m2 * eff
                 m_final_wh = m_raw_wh * p_mod * (1 - ir_loss_const) * (1 - soiling_loss/100) * (1 - system_loss/100)
