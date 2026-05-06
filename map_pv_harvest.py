@@ -1,19 +1,25 @@
-import streamlit as st
-import requests
-import pandas as pd
-import numpy as np
-import pvlib
-import plotly.express as px
-import plotly.graph_objects as go
 import os
 import pickle
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import pvlib
+import requests
+import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
 # --- CONFIGURATION ---
 CACHE_FILE = "pv_data_cache.pkl"
 BASE_URL = "https://developer.nlr.gov/api/pvwatts/v8.json"
-API_KEY = '6UGQKK7Q3p4pEKZXbbvYEnYXzAegBJnzm3vNss38' 
-
+# Option of multiple keys to bypass access limits.
+API_KEYS = {'yossi': '6UGQKK7Q3p4pEKZXbbvYEnYXzAegBJnzm3vNss38', 'nick': 'SLOgec88TwJ0f9kju0hbS3PgdTZfetRDEdMjh9gz'}
+API_KEY = API_KEYS['nick']
 STC_IRRADIANCE = 1000  # Standard Test Condition solar irradiance (W/m^2)
+NUM_THREADS = 20
+MONTH_MAP = {"Jan":0,"Feb":1,"Mar":2,"Apr":3,"May":4,"Jun":5,"Jul":6,"Aug":7,"Sep":8,"Oct":9,"Nov":10,"Dec":11}
 
 # --- CACHING LOGIC ---
 def load_cache():
@@ -80,12 +86,13 @@ st.caption("Calculations include: STC Efficiency, Cosine Angle, Fresnel Reflecti
 # --- SIDEBAR GUI ---
 with st.sidebar:
     sb_col1, sb_col2 = st.columns(2)
-    
+
     with sb_col1:
 
         st.header("Window Geometry")
         window_w = st.slider("Width (mm)", 100, 2000, 1000, step=100)
         window_h = st.slider("Height (mm)", 100, 2000, 1000, step=100)
+
         t_bw = st.slider("Top Border Height (mm)", 10, 100, 25)
         b_bw = st.slider("Bottom Border Height (mm)", 10, 100, 30)
         lr_bw = st.slider("Side Borders Width (mm)", 0, 100, 25)
@@ -97,9 +104,10 @@ with st.sidebar:
         glass_extinction = st.slider("Extinction (K)", 1.0, 32.0, 4.0, step=1.0)
 
     with sb_col2:
-        alpha = st.slider("Window Orientation (Azimuth) [0°=N, 180°=S]", 0, 359, 180)
-        
-        selected_month = st.select_slider("Month Selector", 
+        tilt = st.slider("Window tilt (deg)", 0, 90, 90)
+        alpha = st.slider("Window azimuth [0°=N, 180°=S]", 0, 359, 180)
+
+        selected_month = st.select_slider("Month Selector",
             options=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], value="Jun")
 
         st.header("System Params")
@@ -158,34 +166,36 @@ us_states = {
     "WI": (43.78, -88.78, "Wisconsin"), "WY": (43.07, -107.29, "Wyoming")
 }
 
-def get_psh_data_cached(lat, lon, alpha):
-    key = f"{lat}_{lon}_{alpha}"
+# Returns monthly solar radiation values [kWh/m2/day], based on the given parameters.
+def get_psh_data_cached(lat, lon, alpha, tilt=90):
+    key = f"{lat}_{lon}_{alpha}_{tilt}"
     if key in st.session_state.db:
         return st.session_state.db[key]
-    
-    params = {'api_key': API_KEY, 'lat': lat, 'lon': lon, 'system_capacity': 1.0, 
-              'azimuth': alpha, 'tilt': 90, 'array_type': 0, 'module_type': 0, 'losses': 0}
+
+    params = {'api_key': API_KEY, 'lat': lat, 'lon': lon, 'system_capacity': 1.0,
+              'azimuth': alpha, 'tilt': tilt, 'array_type': 0, 'module_type': 0, 'losses': 0}
     try:
         r = requests.get(BASE_URL, params=params).json()
         data = r['outputs']['solrad_monthly']
         st.session_state.db[key] = data
         return data
-    except:
+    except Exception:
+        print("Error retrieving data")
         return [0]*12
 
 @st.cache_data
-def get_physics_mod(lat, lon, month_idx, alpha, K, L_mm):
+def get_physics_mod(lat, lon, month_idx, alpha, K, L_mm, tilt=90):
     L_m = L_mm / 1000.0  # Convert mm to meters for pvlib
     times = pd.date_range(f'2026-{month_idx+1:02d}-15', periods=24, freq='h', tz='UTC')
     solpos = pvlib.solarposition.get_solarposition(times, lat, lon)
-    aoi = pvlib.irradiance.aoi(90, alpha, solpos['zenith'], solpos['azimuth'])
-    
+    aoi = pvlib.irradiance.aoi(tilt, alpha, solpos['zenith'], solpos['azimuth'])
+
     # Calculate detailed components for hover data
     n = 1.526 # Refractive index of glass
     theta = np.radians(aoi)
     # Snell's Law for internal angle
     theta_r = np.arcsin(np.sin(theta) / n)
-    
+
     # Fresnel Reflection
     # Handle normal incidence (0°) to avoid division by zero
     refl_normal = ((n - 1) / (n + 1))**2
@@ -197,56 +207,131 @@ def get_physics_mod(lat, lon, month_idx, alpha, K, L_mm):
 
     # Beer-Lambert Absorption
     tau_abs = np.exp(-K * (L_m) / np.cos(theta_r))
-    
+
     # Calculate normalized modifier: F(theta) = T(theta) / T(0)
     t_0 = (1 - refl_normal) * np.exp(-K * L_m)
     iam = (tau_refl * tau_abs) / t_0
-    
+
     mask = (solpos['elevation'] > 0) & (aoi < 90)
     if not mask.any():
         return 0.1, 0.0, 0.0
     return iam[mask].mean(), (1 - tau_refl[mask]).mean() * 100, (1 - tau_abs[mask]).mean() * 100
 
 # --- PROCESSING ---
-tab1, tab2, tab3, tab4 = st.tabs(["Interactive Map", "Window Geometry", "Monthly Sufficiency", "Technical Reference"])
+tab0, tab1, tab2, tab3, tab4 = st.tabs(["Peak Sun Hours Map", "Interactive Map", "Window Geometry", "Monthly Sufficiency", "Technical Reference"])
 
-with tab1:
+m_idx = MONTH_MAP[selected_month]
+ctx = get_script_run_ctx()
+
+def get_psh_task(item):
+    code, (lat, lon, name) = item
+    psh_list = get_psh_data_cached(lat, lon, alpha, tilt)
+    psh = psh_list[m_idx]
+    return {"State": code, "Full Name": name, "PSH": round(psh, 2)}
+
+def process_simulation_task(item):
+    code, (lat, lon, name) = item
+    psh_list = get_psh_data_cached(lat, lon, alpha, tilt)
+    psh = psh_list[m_idx]
+    phys_mod, f_loss, a_loss = get_physics_mod(lat, lon, m_idx, alpha, glass_extinction, glass_thickness, tilt)
+    raw_wh = (psh * STC_IRRADIANCE) * total_area_m2 * eff
+    # Combine all derate factors: IAM * IR Loss * Soiling * System
+    final_wh = raw_wh * phys_mod * (1 - ir_loss_const) * (1 - soiling_loss/100) * (1 - system_loss/100)
+    status = "Insufficient" if final_wh < film_total_daily_consumption_wh else "Sufficient"
+    return {"State": code, "Full Name": name, "Final Wh": round(final_wh, 2), "Status": status,
+            "PSH": round(psh, 2), "Fresnel Loss": round(f_loss, 2), "Absorption": round(a_loss, 2)}
+
+def get_psh_all_states_multithread(my_bar):
+    # Function to wrap the task and ensure it has access to Streamlit context for caching.
+    def _wrapped_process_state_task(item, context):
+        add_script_run_ctx(None, context) # Attach to current thread
+        return get_psh_task(item)
+
+    data_rows = []
+    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        futures = [executor.submit(_wrapped_process_state_task, item, ctx) for item in us_states.items()]
+        for i, future in enumerate(as_completed(futures)):
+            data_rows.append(future.result())
+            # Update progress and show current state name to user
+            name = future.result()["Full Name"]
+            percent_complete = (i+1) / len(futures)
+            my_bar.progress(percent_complete, text=f"Processing {name}...")
+
+    # Save cache to disk once after batch processing is complete
+    save_cache(st.session_state.db)
+    df = pd.DataFrame(data_rows)
+    return df
+
+def process_simulation_all_states_multithreaded(my_bar):
+    # Function to wrap the task and ensure it has access to Streamlit context for caching.
+    def _wrapped_process_state_task(item, context):
+        add_script_run_ctx(None, context) # Attach to current thread
+        return process_simulation_task(item)
+
+    data_rows = []
+    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        futures = [executor.submit(_wrapped_process_state_task, item, ctx) for item in us_states.items()]
+
+        for i, future in enumerate(as_completed(futures)):
+            data_rows.append(future.result())
+            # Update progress and show current state name to user
+            name = future.result()["Full Name"]
+            percent_complate = (i+1) / len(futures)
+            my_bar.progress(percent_complate, text=f"Processing {name}...")
+
+    # Save cache to disk once after batch processing is complete
+    save_cache(st.session_state.db)
+    df = pd.DataFrame(data_rows)
+    return df
+
+with tab0:
     # Create progress bar at the top of the tab for maximum visibility
-    my_bar = st.progress(0, text="Preparing simulation...")
+    my_bar = st.progress(0, text="Retrieving data...")
 
     c1, c2 = st.columns([5, 1])
 
     with c1:
         map_container = st.container() # This container will hold the map
 
-    month_map = {"Jan":0,"Feb":1,"Mar":2,"Apr":3,"May":4,"Jun":5,"Jul":6,"Aug":7,"Sep":8,"Oct":9,"Nov":10,"Dec":11}
-    m_idx = month_map[selected_month]
-    data_rows = []
-
-    for i, (code, (lat, lon, name)) in enumerate(us_states.items()):
-        psh_list = get_psh_data_cached(lat, lon, alpha)
-        psh = psh_list[m_idx]
-        phys_mod, f_loss, a_loss = get_physics_mod(lat, lon, m_idx, alpha, glass_extinction, glass_thickness)
-        raw_wh = (psh * STC_IRRADIANCE) * total_area_m2 * eff
-        # Combine all derate factors: IAM * IR Loss * Soiling * System
-        final_wh = raw_wh * phys_mod * (1 - ir_loss_const) * (1 - soiling_loss/100) * (1 - system_loss/100)
-        status = "Insufficient" if final_wh < film_total_daily_consumption_wh else "Sufficient"
-        data_rows.append({"State": code, "Full Name": name, "Final Wh": round(final_wh, 2), "Status": status, 
-                          "PSH": round(psh, 2), "Fresnel Loss": round(f_loss, 2), "Absorption": round(a_loss, 2)})
-        # Update progress and show current state name to user
-        my_bar.progress((i + 1) / len(us_states), text=f"Processing {name}...")
-
-    # Save cache to disk once after batch processing is complete
-    save_cache(st.session_state.db)
+    df = get_psh_all_states_multithread(my_bar)
     my_bar.empty()
-    df = pd.DataFrame(data_rows)
+
+    # --- FILL UI LAYOUT ---
+    with map_container:
+        custom_scale = 'solar'
+
+        fig = px.choropleth(df,
+            locations='State',
+            locationmode="USA-states",
+            color="PSH",
+            scope="usa",
+            hover_name="Full Name",
+            hover_data={"PSH": ":.2f", "State": False},
+            title=f"Peak sun hours, solrad_monthly - {selected_month}",
+            color_continuous_scale=custom_scale,
+            labels={'PSH': 'Peak Sun Hours (kWh/m2)'})
+        fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
+        st.plotly_chart(fig, width='stretch')
+
+with tab1:
+    # Create progress bar at the top of the tab for maximum visibility
+    bar1 = st.progress(0, text="Preparing simulation...")
+
+    c1, c2 = st.columns([5, 1])
+
+    with c1:
+        map_container = st.container() # This container will hold the map
+
+    df = process_simulation_all_states_multithreaded(bar1)
+    bar1.empty()
+
 
     # --- FILL UI LAYOUT ---
     with map_container:
         # Calculate dynamic color scale centered at the consumption threshold
         min_val_df = df['Final Wh'].min()
         max_val_df = df['Final Wh'].max()
-        
+
         diff = max_val_df - min_val_df
         if diff <= 0:
             z_mid = 0.5
@@ -260,17 +345,17 @@ with tab1:
             [1, "#09ab3b"]       # Sufficient (Green)
         ]
 
-        fig = px.choropleth(df, 
-            locations='State', 
-            locationmode="USA-states", 
+        fig = px.choropleth(df,
+            locations='State',
+            locationmode="USA-states",
             color='Final Wh',
             scope="usa",
             hover_name="Full Name",
-            hover_data={"Status": True, "Final Wh": ":.2f", "PSH": ":.2f", 
+            hover_data={"Status": True, "Final Wh": ":.2f", "PSH": ":.2f",
                         "Fresnel Loss": ":.2f", "Absorption": ":.2f", "State": False},
             title=f"Daily Average Harvest (Wh) - {selected_month}",
             color_continuous_scale=custom_scale,
-            labels={'Final Wh':'Wh/Day', 'PSH': 'Peak Sun Hours', 
+            labels={'Final Wh':'Wh/Day', 'PSH': 'Peak Sun Hours',
                     'Fresnel Loss': 'Fresnel Loss (%)', 'Absorption': 'Absorption (%)'})
         fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
         st.plotly_chart(fig, width='stretch')
@@ -300,7 +385,7 @@ with tab2:
     st.header("Window Design Visualization")
     # 2D Window Drawing (Scaled)
     fig_win = go.Figure()
-    
+
     # White Outer Frame (40mm wide, placed behind)
     frame_w = 40
     fig_win.add_shape(type="rect", x0=-frame_w, y0=-frame_w, x1=window_w+frame_w, y1=window_h+frame_w,
@@ -336,23 +421,23 @@ with tab2:
 with tab3:
     st.header("Monthly Harvesting Sufficiency")
     st.caption("Values in Wh/day. Green = Sufficient harvest | Red = Insufficient harvest")
-    
+
     # This matrix calculation involves 600 data points (50 states * 12 months)
     with st.spinner("Calculating annual sufficiency matrix..."):
         months_list = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         matrix_rows = []
         for code, (lat, lon, name) in us_states.items():
             state_row = {"State": name}
-            psh_list = get_psh_data_cached(lat, lon, alpha)
+            psh_list = get_psh_data_cached(lat, lon, alpha, tilt)
             for m_i, m_name in enumerate(months_list):
-                p_mod, _, _ = get_physics_mod(lat, lon, m_i, alpha, glass_extinction, glass_thickness)
+                p_mod, _, _ = get_physics_mod(lat, lon, m_i, alpha, glass_extinction, glass_thickness, tilt)
                 m_psh = psh_list[m_i]
                 m_raw_wh = (m_psh * STC_IRRADIANCE) * total_area_m2 * eff
                 m_final_wh = m_raw_wh * p_mod * (1 - ir_loss_const) * (1 - soiling_loss/100) * (1 - system_loss/100)
-                
+
                 state_row[m_name] = round(m_final_wh, 3)
             matrix_rows.append(state_row)
-        
+
         matrix_df = pd.DataFrame(matrix_rows)
 
         # Use a large height to ensure all states are visible without nested scrollbars

@@ -36,6 +36,10 @@ When hovering over the map, A blob will show:
 * Energy collected per day
 * Peak sun hours
 
+### Peak Sun Hours Map
+This represents the Peak Sun Hours (kWh/m2) for the average day of a given month. This provides a baseline for the amount of solar power available based on panel location and orientation.
+Observe: As window/PV angle tilt approaches vertical (0deg), overall PSH decreases; and Northern locations generally perform better than Southern locations.
+
 ## Equations
 
 The mathematical model and physical assumptions used in the solar window harvesting simulation.
