@@ -218,7 +218,7 @@ def get_physics_mod(lat, lon, month_idx, alpha, K, L_mm, tilt=90):
     return iam[mask].mean(), (1 - tau_refl[mask]).mean() * 100, (1 - tau_abs[mask]).mean() * 100
 
 # --- PROCESSING ---
-tab0, tab1, tab2, tab3, tab4 = st.tabs(["Monthly SolRad Map", "Interactive Map", "Window Geometry", "Monthly Sufficiency", "Technical Reference"])
+tab0, tab1, tab2, tab3, tab4 = st.tabs(["Peak Sun Hours Map", "Interactive Map", "Window Geometry", "Monthly Sufficiency", "Technical Reference"])
 
 m_idx = MONTH_MAP[selected_month]
 ctx = get_script_run_ctx()
@@ -307,9 +307,9 @@ with tab0:
             scope="usa",
             hover_name="Full Name",
             hover_data={"PSH": ":.2f", "State": False},
-            title=f"Monthly solar radiation, Peak sun hours (kWh/m2/day) - {selected_month}",
+            title=f"Peak sun hours, solrad_monthly - {selected_month}",
             color_continuous_scale=custom_scale,
-            labels={'PSH': 'Peak Sun Hours (kWh/m2/day)'})
+            labels={'PSH': 'Peak Sun Hours (kWh/m2)'})
         fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
         st.plotly_chart(fig, width='stretch')
 
