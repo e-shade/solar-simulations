@@ -105,7 +105,7 @@ with st.sidebar:
 
     with sb_col2:
         tilt = st.slider("Window tilt (deg)", 0, 90, 90)
-        alpha = st.slider("Window azimuth [0°=N, 180°=S]", 0, 359, 180)
+        alpha = st.slider("Window azimuth [0°=N, 180°=S]", 0, 359, 180, step=15)
 
         selected_month = st.select_slider("Month Selector",
             options=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], value="Jun")
@@ -309,7 +309,7 @@ with tab0:
             hover_data={"PSH": ":.2f", "State": False},
             title=f"Peak sun hours, solrad_monthly - {selected_month}",
             color_continuous_scale=custom_scale,
-            labels={'PSH': 'Peak Sun Hours (kWh/m2)'})
+            labels={'PSH': 'Peak Sun Hours'})
         fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
         st.plotly_chart(fig, width='stretch')
 
