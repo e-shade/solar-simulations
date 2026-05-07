@@ -82,42 +82,46 @@ st.markdown("""
 
 st.title("☀️ Interactive Window PV Harvester")
 st.caption("Calculations include: STC Efficiency, Cosine Angle, Fresnel Reflection (Glass), and Spectral IR Filtering.")
+# Define navigation with 'top' position
 
 # --- SIDEBAR GUI ---
 with st.sidebar:
-    sb_col1, sb_col2 = st.columns(2)
+    sb_col1, sb_col2, sb_col3 = st.columns(3)
 
     with sb_col1:
-
         st.header("Window Geometry")
+        tilt = st.slider("Tilt (0°=horizontal)", 0, 90, 90)
+        alpha = st.slider("Azimuth (0°=N, 180°=S)", 0, 359, 180, step=15)
         window_w = st.slider("Width (mm)", 100, 2000, 1000, step=100)
         window_h = st.slider("Height (mm)", 100, 2000, 1000, step=100)
-
         t_bw = st.slider("Top Border Height (mm)", 10, 100, 25)
         b_bw = st.slider("Bottom Border Height (mm)", 10, 100, 30)
         lr_bw = st.slider("Side Borders Width (mm)", 0, 100, 25)
-        tb_thickness = st.slider("Top and Bottom Thickness (mm)", 5, 20, 10)
-        batt_loc = st.radio("Battery Location", ["Bottom Only", "Top & Bottom"], index=1)
 
+    with sb_col2:
         st.header("Glass Properties")
         glass_thickness = st.slider("Thickness (mm)", 1.0, 10.0, 2.0, step=0.5)
         glass_extinction = st.slider("Extinction (K)", 1.0, 32.0, 4.0, step=1.0)
 
-    with sb_col2:
-        tilt = st.slider("Window tilt (deg)", 0, 90, 90)
-        alpha = st.slider("Window azimuth [0°=N, 180°=S]", 0, 359, 180, step=15)
-
-        selected_month = st.select_slider("Month Selector",
-            options=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], value="Jun")
-
         st.header("System Params")
         film_power_consumption = st.slider("Film Power (W/sqm)", 1, 20, 2)
-        active_hours_per_day = st.slider("Active Hours", 1, 24, 8)
-        lipoly_energy_density = st.slider("Bat Density (Wh/L)", 200, 600, 350)
         eff = st.slider("Cell Efficiency (E)", 0.10, 0.30, 0.22)
         ir_loss_const = st.slider("IR Blocking Loss", 0.0, 0.50, 0.15)
         soiling_loss = st.slider("Soiling/Dirt Loss (%)", 0, 10, 2)
         system_loss = st.slider("Electrical Losses (%)", 0, 30, 10)
+
+    with sb_col3:
+        st.header("Battery")
+        batt_loc = st.radio("Battery Location", ["Bottom Only", "Top & Bottom"], index=1)
+        tb_thickness = st.slider("Top and Bottom Thickness (mm)", 5, 20, 10)
+        lipoly_energy_density = st.slider("Bat Density (Wh/L)", 200, 600, 350)
+
+        st.header("Usage")
+        active_hours_per_day = st.slider("Active Hours", 1, 24, 8)
+        selected_month = st.select_slider("Month Selector",
+            options=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], value="Jun")
+
+
 
 # --- CALCULATIONS ---
 # 1. Areas in mm^2
@@ -289,7 +293,6 @@ with tab0:
     my_bar = st.progress(0, text="Retrieving data...")
 
     c1, c2 = st.columns([5, 1])
-
     with c1:
         map_container = st.container() # This container will hold the map
 
