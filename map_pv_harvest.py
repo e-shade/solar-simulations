@@ -20,6 +20,8 @@ API_KEY = API_KEYS['nick']
 STC_IRRADIANCE = 1000  # Standard Test Condition solar irradiance (W/m^2)
 NUM_THREADS = 20
 MONTH_MAP = {"Jan":0,"Feb":1,"Mar":2,"Apr":3,"May":4,"Jun":5,"Jul":6,"Aug":7,"Sep":8,"Oct":9,"Nov":10,"Dec":11}
+# Maps usage scenario to hour/day of activation.
+SCENARIO_TO_ACTIVE_HOURS = {"Office":3, "Kitchen":2, "Living room": 4, "Bedroom": 8}
 
 # --- CACHING LOGIC ---
 def load_cache():
@@ -117,11 +119,14 @@ with st.sidebar:
         lipoly_energy_density = st.slider("Bat Density (Wh/L)", 200, 600, 350)
 
         st.header("Usage")
-        active_hours_per_day = st.slider("Active Hours", 1, 24, 8)
         selected_month = st.select_slider("Month Selector",
             options=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], value="Jun")
-
-
+        adjustable_active_hours_per_day = st.slider("Active Hours (hrs/day)", 1, 24, 8)
+        SCENARIO_TO_ACTIVE_HOURS['Use slider'] = adjustable_active_hours_per_day
+        scenario = st.selectbox(
+            'Scenario activation (hrs/day)', ('Use slider', 'Office', 'Kitchen', 'Living room', 'Bedroom'),
+            format_func=lambda x: f"{x} ({SCENARIO_TO_ACTIVE_HOURS[x]})"
+        )
 
 # --- CALCULATIONS ---
 # 1. Areas in mm^2
@@ -147,6 +152,7 @@ total_battery_capacity_wh = total_battery_volume_l * lipoly_energy_density
 # 4. Film Power Consumption (for reference, not used in map)
 total_film_area_m2 = (window_w * window_h) / 1_000_000
 film_power_consumption_w = total_film_area_m2 * film_power_consumption
+active_hours_per_day = SCENARIO_TO_ACTIVE_HOURS[scenario]
 film_total_daily_consumption_wh = film_power_consumption_w * active_hours_per_day
 
 # --- STATE DATA ---
