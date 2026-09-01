@@ -22,6 +22,17 @@ NUM_THREADS = 20
 MONTH_MAP = {"Jan":0,"Feb":1,"Mar":2,"Apr":3,"May":4,"Jun":5,"Jul":6,"Aug":7,"Sep":8,"Oct":9,"Nov":10,"Dec":11}
 # Maps usage scenario to hour/day of activation.
 SCENARIO_TO_ACTIVE_HOURS = {"Office":3, "Kitchen":2, "Living room": 4, "Bedroom": 8}
+# Cell technology presets. Cells are mounted sealed behind residential window glass with no
+# rear ventilation, so heat builds up more than on an open-rack rooftop module; crystalline
+# cells' higher temperature coefficient makes them lose more efficiency to that trapped heat,
+# while amorphous cells' wider bandgap means they use little near-IR anyway, so an IR-blocking
+# (Low-E) coating costs them much less than it costs crystalline cells.
+CELL_TECH_PRESETS = {
+    "Crystalline Si": {"eff_min": 0.15, "eff_max": 0.23, "eff_default": 0.20,
+                        "ir_loss_default": 0.15, "thermal_derate_default": 0.08},
+    "Amorphous Si (a-Si)": {"eff_min": 0.04, "eff_max": 0.10, "eff_default": 0.07,
+                             "ir_loss_default": 0.05, "thermal_derate_default": 0.03},
+}
 
 # --- CACHING LOGIC ---
 def load_cache():
@@ -83,7 +94,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 st.title("☀️ Interactive Window PV Harvester")
-st.caption("Calculations include: STC Efficiency, Cosine Angle, Fresnel Reflection (Glass), and Spectral IR Filtering.")
+st.caption("Calculations include: Cell Technology (Crystalline/Amorphous), STC Efficiency, Cosine Angle, Fresnel Reflection (Glass), Spectral IR Filtering, and Behind-Glass Thermal Derate.")
 # Define navigation with 'top' position
 
 # --- SIDEBAR GUI ---
@@ -106,9 +117,18 @@ with st.sidebar:
         glass_extinction = st.slider("Extinction (K)", 1.0, 32.0, 4.0, step=1.0)
 
         st.header("System Params")
+        cell_tech = st.selectbox("Cell Technology", list(CELL_TECH_PRESETS.keys()),
+            help="Crystalline: higher efficiency, more heat-sensitive, more exposed to IR-blocking loss. "
+                 "Amorphous (a-Si): lower efficiency, less heat-sensitive, little IR-blocking loss.")
+        preset = CELL_TECH_PRESETS[cell_tech]
         film_power_consumption = st.slider("Film Power (W/sqm)", 1, 20, 2)
-        eff = st.slider("Cell Efficiency (E)", 0.10, 0.30, 0.22)
-        ir_loss_const = st.slider("IR Blocking Loss", 0.0, 0.50, 0.15)
+        eff = st.slider("Cell Efficiency (E)", preset["eff_min"], preset["eff_max"], preset["eff_default"],
+            step=0.01, key=f"eff_{cell_tech}")
+        ir_loss_const = st.slider("IR Blocking Loss", 0.0, 0.50, preset["ir_loss_default"], key=f"ir_{cell_tech}")
+        thermal_derate = st.slider("Behind-Glass Heat Derate", 0.0, 0.30, preset["thermal_derate_default"],
+            key=f"therm_{cell_tech}",
+            help="Efficiency lost to cell heating from trapped solar heat behind sealed window glass "
+                 "(no rear ventilation like an outdoor rack-mounted module).")
         soiling_loss = st.slider("Soiling/Dirt Loss (%)", 0, 10, 2)
         system_loss = st.slider("Electrical Losses (%)", 0, 30, 10)
 
@@ -245,8 +265,8 @@ def process_simulation_task(item):
     psh = psh_list[m_idx]
     phys_mod, f_loss, a_loss = get_physics_mod(lat, lon, m_idx, alpha, glass_extinction, glass_thickness, tilt)
     raw_wh = (psh * STC_IRRADIANCE) * total_area_m2 * eff
-    # Combine all derate factors: IAM * IR Loss * Soiling * System
-    final_wh = raw_wh * phys_mod * (1 - ir_loss_const) * (1 - soiling_loss/100) * (1 - system_loss/100)
+    # Combine all derate factors: IAM * IR Loss * Thermal (behind-glass heat) * Soiling * System
+    final_wh = raw_wh * phys_mod * (1 - ir_loss_const) * (1 - thermal_derate) * (1 - soiling_loss/100) * (1 - system_loss/100)
     status = "Insufficient" if final_wh < film_total_daily_consumption_wh else "Sufficient"
     return {"State": code, "Full Name": name, "Final Wh": round(final_wh, 2), "Status": status,
             "PSH": round(psh, 2), "Fresnel Loss": round(f_loss, 2), "Absorption": round(a_loss, 2)}
@@ -442,7 +462,7 @@ with tab3:
                 p_mod, _, _ = get_physics_mod(lat, lon, m_i, alpha, glass_extinction, glass_thickness, tilt)
                 m_psh = psh_list[m_i]
                 m_raw_wh = (m_psh * STC_IRRADIANCE) * total_area_m2 * eff
-                m_final_wh = m_raw_wh * p_mod * (1 - ir_loss_const) * (1 - soiling_loss/100) * (1 - system_loss/100)
+                m_final_wh = m_raw_wh * p_mod * (1 - ir_loss_const) * (1 - thermal_derate) * (1 - soiling_loss/100) * (1 - system_loss/100)
 
                 state_row[m_name] = round(m_final_wh, 3)
             matrix_rows.append(state_row)

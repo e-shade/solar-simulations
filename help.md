@@ -5,7 +5,23 @@ This app calculates the daily average energy harvest based on:
 * **PSH (Peak Sun Hours):** Monthly averages sourced from NREL/NLR.
 * **AOI (Angle of Incidence):** Fresnel reflection and cosine losses for vertical glass.
 * **IR Cut Loss:** Spectral attenuation from Low-E window coatings.
+* **Behind-Glass Thermal Derate:** Efficiency lost to cell heating, technology-dependent.
 * **Window & PDLC Frame Geometry**
+
+### Cell Technology
+The cells are mounted sealed behind residential window glass, with no rear ventilation like an
+outdoor rack-mounted module would have. That changes which technology performs best:
+
+* **Crystalline Si:** Higher STC efficiency (~15-23%), but a stronger negative temperature
+  coefficient (~-0.45%/°C) means trapped heat behind the glass costs it more. Its absorption
+  extends into near-IR, so a Low-E/IR-blocking coating removes more of its usable spectrum.
+* **Amorphous Si (a-Si):** Lower STC efficiency (~4-10%), but a much smaller temperature
+  coefficient (~-0.20%/°C) makes it more tolerant of the heat buildup behind sealed glass. Its
+  wider bandgap means it barely converts near-IR to begin with, so an IR-blocking coating costs
+  it very little.
+
+Selecting a technology in **System Params** sets defaults for Cell Efficiency, IR Blocking Loss,
+and Behind-Glass Heat Derate — all three remain adjustable sliders.
 
 ### Azimuth Guide
 * **0°**: North
@@ -101,14 +117,15 @@ $$
 The final daily energy harvested ($E_{harvest}$) in Watt-hours ($Wh$) is the product of the available solar resource and the system efficiency chain:
 
 $$
-E_{harvest} = (PSH \times STC) \cdot A_{PV} \cdot \eta_{cell} \cdot F(\theta) \cdot (1 - L_{IR}) \cdot (1 - L_{soil}) \cdot (1 - L_{sys})
+E_{harvest} = (PSH \times STC) \cdot A_{PV} \cdot \eta_{cell} \cdot F(\theta) \cdot (1 - L_{IR}) \cdot (1 - L_{therm}) \cdot (1 - L_{soil}) \cdot (1 - L_{sys})
 $$
 
 **Where:**
 * $PSH$: Peak Sun Hours (derived from NREL monthly averages).
 * $A_{PV}$: Total active cell area ($m^2$).
-* $\eta_{cell}$: Rated cell efficiency (e.g., $0.22$).
-* $L_{IR}$: Spectral loss from the Low-E / IR-cut window coating.
+* $\eta_{cell}$: Rated cell efficiency, technology-dependent (e.g., $0.20$ crystalline, $0.07$ amorphous).
+* $L_{IR}$: Spectral loss from the Low-E / IR-cut window coating, technology-dependent.
+* $L_{therm}$: Behind-glass thermal derate from cell heating (no rear ventilation), technology-dependent.
 * $L_{soil}$: Soiling loss (dust, dirt, bird droppings).
 * $L_{sys}$: System losses (wiring, mismatch, conversion).
 * $STC$: Standard Test Condition solar irradiance (1000 W/m^2)
