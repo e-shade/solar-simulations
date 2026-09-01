@@ -121,7 +121,7 @@ with st.sidebar:
             help="Crystalline: higher efficiency, more heat-sensitive, more exposed to IR-blocking loss. "
                  "Amorphous (a-Si): lower efficiency, less heat-sensitive, little IR-blocking loss.")
         preset = CELL_TECH_PRESETS[cell_tech]
-        film_power_consumption = st.number_input("Film Power (W/sqm)", min_value=0, value=1)
+        film_power_consumption = st.number_input("Film Power (W/sqm)", min_value=0.0, value=1.0, step=0.05, format="%.2f")
         eff = st.slider("Cell Efficiency (E)", preset["eff_min"], preset["eff_max"], preset["eff_default"],
             step=0.01, key=f"eff_{cell_tech}")
         ir_loss_const = st.slider("IR Blocking Loss", 0.0, 0.50, preset["ir_loss_default"], key=f"ir_{cell_tech}")
